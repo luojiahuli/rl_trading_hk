@@ -16,12 +16,13 @@ class VisualizationAgent(BaseAgent):
             import matplotlib.pyplot as plt
             from config import REPORT_DIR
             # macOS 中文字体
-            for font_name in ["PingFang SC", "Apple SD Gothic Neo", "STHeiti"]:
+            import matplotlib.font_manager as fm
+            for fp in ["/System/Library/Fonts/PingFang.ttc", "/System/Library/Fonts/STHeiti Medium.ttc"]:
                 try:
-                    matplotlib.font_manager.fontManager.addfont(f"/System/Library/Fonts/{font_name}.ttc")
+                    fm.fontManager.addfont(fp)
                 except Exception:
                     pass
-            plt.rcParams["font.sans-serif"] = ["PingFang SC", "Apple SD Gothic Neo", "STHeiti", "DejaVu Sans"]
+            plt.rcParams["font.sans-serif"] = ["PingFang HK", "Heiti TC", "DejaVu Sans"]
             plt.rcParams["axes.unicode_minus"] = False
             os.makedirs(REPORT_DIR, exist_ok=True)
 
