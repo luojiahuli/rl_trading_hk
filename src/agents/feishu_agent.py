@@ -74,13 +74,30 @@ class FeishuPushAgent(BaseAgent):
             lines.append([{"tag": "text", "text": f"  {mj_line}"}])
             lines.append([{"tag": "text", "text": ""}])
 
-        # 交易信号
+        # 交易信号（带详细理由）
         if ctx.rl_signals:
-            lines.append([{"tag": "text", "text": "📈 交易信号:"}])
-            for s in ctx.rl_signals[:5]:
-                emoji = "🟢" if s["action"] == "buy" else "🔴"
-                lines.append([{"tag": "text", "text": f"  {emoji} {s['stock']}: {s['action']} ({s['confidence']:.0%})"}])
+            buys = [s for s in ctx.rl_signals if s["action"] == "buy"]
+            sells = [s for s in ctx.rl_signals if s["action"] == "sell"]
+            lines.append([{"tag": "text", "text": f"📈 交易信号: 🟢买入{len(buys)}只 🔴卖出{len(sells)}只"}])
             lines.append([{"tag": "text", "text": ""}])
+            if buys:
+                lines.append([{"tag": "text", "text": "  🟢 买入信号:"}])
+                for s in buys[:5]:
+                    strategy = s.get("strategy", s.get("reason", "")[:20])
+                    reason = s.get("reason", "")
+                    lines.append([{"tag": "text", "text": f"    {s['stock']} | 置信度{s.get('confidence',0):.0%} | {strategy}"}])
+                    if reason:
+                        lines.append([{"tag": "text", "text": f"      {reason[:60]}"}])
+                lines.append([{"tag": "text", "text": ""}])
+            if sells:
+                lines.append([{"tag": "text", "text": "  🔴 卖出信号:"}])
+                for s in sells[:5]:
+                    strategy = s.get("strategy", s.get("reason", "")[:20])
+                    reason = s.get("reason", "")
+                    lines.append([{"tag": "text", "text": f"    {s['stock']} | 置信度{s.get('confidence',0):.0%} | {strategy}"}])
+                    if reason:
+                        lines.append([{"tag": "text", "text": f"      {reason[:60]}"}])
+                lines.append([{"tag": "text", "text": ""}])
 
         # 策略绩效
         if ctx.strategy_results:
@@ -115,7 +132,7 @@ class FeishuPushAgent(BaseAgent):
                 )
             upload_result = upload_resp.json()
             if upload_result.get("code") != 0:
-                context.warnings.append(f"飞书图片上传失败: {upload_result}")
+                ctx.warnings.append(f"飞书图片上传失败: {upload_result}")
                 return
             image_key = upload_result["data"]["image_key"]
             payload = {
@@ -132,6 +149,6 @@ class FeishuPushAgent(BaseAgent):
                 headers=headers, json=payload, timeout=10,
             )
             if resp.json().get("code") == 0:
-                context.warnings.append("飞书图片推送成功")
+                ctx.warnings.append("飞书图片推送成功")
         except Exception as e:
-            context.warnings.append(f"飞书图片推送异常: {e}")
+            ctx.warnings.append(f"飞书图片推送异常: {e}")
