@@ -71,3 +71,29 @@ bash daily_push.sh
 | `FEISHU_CHAT_ID` | 飞书群 ID | `oc_ed483f60e1bc9408534038ee155eaf5d` |
 | `MIN_STOCK_PRICE` | 最低股价过滤 | HK$1.0 |
 | `INITIAL_CASH` | 初始资金 | HK$1,000,000 |
+
+
+## 回测表现
+更新日期: 2026-05-30
+初始资金: ¥1,000,000
+数据范围: 2024-01-01 ~ 2026-05-30
+
+### 基础策略 (逐只回测合计)
+| 策略 | 总收益率 | Sharpe | 最大回撤 | 交易次数 |
+|------|---------|--------|---------|---------|
+| trend_following | +3202.35% | 0.62 | -28.63% | 1093 |
+| momentum | +2982.05% | 0.54 | -31.08% | 1376 |
+| breakout | +2231.68% | 0.51 | -31.46% | 648 |
+| mean_reversion | +1931.63% | 0.76 | -23.59% | 1889 |
+
+### 组合引擎 (集中投资+止损止盈)
+| 策略 | 总收益率 | Sharpe | 最大回撤 | 交易次数 | 止损次数 | 止盈次数 |
+|------|---------|--------|---------|---------|---------|---------|
+| enhanced_trend | -52.70% | -0.31 | -65.23% | 212 | 32 | 31 |
+| enhanced_mean_reversion | -92.41% | -0.28 | -95.64% | 49 | 16 | 4 |
+| enhanced_momentum | -95.07% | -0.30 | -96.73% | 152 | 57 | 13 |
+| enhanced_breakout | -96.67% | -0.31 | -97.64% | 119 | 34 | 27 |
+
+![Equity Curves](output/reports/backtest_chart_20260530.png)
+
+详细数据: [/Users/mac13/workspace/rl_trading_hk/output/reports/equity_curves_20260530.csv](/Users/mac13/workspace/rl_trading_hk/output/reports/equity_curves_20260530.csv)
