@@ -1,22 +1,15 @@
 #!/usr/bin/env python3
-"""热门板块挖掘 Agent — 港股版（基于 scrapling_utils）"""
+"""热门板块挖掘 Agent — 港股版（ECC 架构：COLLECT → ENRICH → STORE）"""
 from ..agents.base import AgentContext, BaseAgent
-from ..data.sector_map import extract_hot_sectors_from_news, _SECTOR_STOCK_MAP_HK
-from ..data.fetcher import fetch_hk_news
-from scrapling_utils import SmartFetcher
-from scrapling_utils.news_sources import (
-    YahooFinanceNews, AASTOCKSNews, SinaFinanceNews, CailiansheNews
+from ..data.sector_map import _SECTOR_STOCK_MAP_HK
+from scrapling_utils import (
+    fetch_all_parallel,
+    classify_sectors,
+    get_resolved_config,
+    ContentHashCache,
 )
 
-_fetcher = SmartFetcher()
-_yahoo = YahooFinanceNews()
-_yahoo.fetcher = _fetcher
-_aastocks = AASTOCKSNews()
-_aastocks.fetcher = _fetcher
-_sina = SinaFinanceNews()
-_sina.fetcher = _fetcher
-_cls = CailiansheNews()
-_cls.fetcher = _fetcher
+_CACHE = ContentHashCache(ttl_minutes=30)
 
 
 class HotSectorMiningAgent(BaseAgent):
@@ -24,82 +17,57 @@ class HotSectorMiningAgent(BaseAgent):
     description = "从香港和内地财经媒体挖掘港股热门板块"
 
     def execute(self, context: AgentContext) -> AgentContext:
-        news_items = []
-        source_name = ""
+        cfg = get_resolved_config()
 
-        # 1. Yahoo Finance
-        items = _yahoo.fetch()
-        if items:
-            news_items = [n.to_dict() for n in items]
-            source_name = "yahoo_finance"
+        # ── Phase 1: COLLECT — 并行抓取 ──────────────────
+        news_items = fetch_all_parallel(
+            market="hk",
+            max_workers=cfg.get("global", {}).get("max_workers", 5),
+            max_per_source=cfg.get("markets", {}).get("hk", {}).get("max_news_per_source", 10),
+        )
+        context.news_data = [n.to_dict() for n in news_items]
+        context.warnings.append(f"港股并行抓取: {len(news_items)} 条新闻")
 
-        # 2. AASTOCKS
-        if not news_items:
-            items = _aastocks.fetch()
-            if items:
-                news_items = [n.to_dict() for n in items]
-                source_name = "aastocks"
-
-        # 3. yfinance API
-        if not news_items:
-            news_items = fetch_hk_news()
-            source_name = "yahoo_finance_api"
-
-        # 4. 新浪港股
-        if not news_items:
-            items = _sina.fetch(lid="2515")
-            if items:
-                news_items = [n.to_dict() for n in items]
-                source_name = "sina_hk"
-
-        # 5. 财联社
-        if not news_items:
-            items = _cls.fetch()
-            if items:
-                news_items = [n.to_dict() for n in items]
-                source_name = "cls"
-
+        # ── Phase 2: ENRICH — 板块分类 ────────────────────
         if news_items:
-            self._process_news(context, news_items, source_name)
-            return context
+            texts = [n.title + " " + (n.content or "") for n in news_items]
+            use_llm = cfg.get("ai", {}).get("enabled", False)
+            api_key = cfg.get("ai", {}).get("api_key", "")
+            sectors = classify_sectors(texts, market="hk", api_key=api_key, use_llm=use_llm)
+        else:
+            sectors = None
 
-        # 6. Fallback: 预设板块
-        fallback = []
+        if sectors:
+            hot_sectors = self._enrich_with_stocks(sectors)
+            context.warnings.append(f"发现 {len(hot_sectors)} 个港股热门板块")
+        else:
+            hot_sectors = self._preset_sectors()
+            context.warnings.append("无新闻数据，使用预设板块")
+
+        # ── Phase 3: STORE — 输出 ─────────────────────────
+        context.hot_sectors = hot_sectors
+        return context
+
+    def _enrich_with_stocks(self, classified: list[dict]) -> list[dict]:
+        results = []
+        for item in classified[:8]:
+            stocks = _SECTOR_STOCK_MAP_HK.get(item["sector"], [])
+            results.append({
+                "sector": item["sector"],
+                "heat_score": item["heat_score"],
+                "summary": f"热度{item['heat_score']}({item.get('source', 'keyword')})",
+                "stocks": stocks[:5],
+            })
+        return results
+
+    def _preset_sectors(self) -> list[dict]:
+        results = []
         for i, (sector, stocks) in enumerate(_SECTOR_STOCK_MAP_HK.items()):
             heat = max(0, 80 - i * 5)
-            fallback.append({
+            results.append({
                 "sector": sector,
                 "heat_score": heat,
                 "summary": "预设关注板块",
                 "stocks": stocks[:5],
             })
-        context.hot_sectors = fallback[:8]
-        context.news_data = []
-        context.warnings.append(f"所有新闻源不可用，使用 {len(fallback)} 个预设板块")
-        return context
-
-    def _process_news(self, context: AgentContext, news_items: list, source: str):
-        context.news_data = news_items
-        hot_sectors_raw = extract_hot_sectors_from_news(news_items)
-        hot_sectors = []
-        if hot_sectors_raw:
-            for sector, score in hot_sectors_raw[:8]:
-                stocks = _SECTOR_STOCK_MAP_HK.get(sector, [])
-                hot_sectors.append({
-                    "sector": sector,
-                    "heat_score": score * 10,
-                    "summary": f"新闻热点({source})",
-                    "stocks": stocks[:5],
-                })
-        else:
-            for i, (sector, stocks) in enumerate(_SECTOR_STOCK_MAP_HK.items()):
-                if i >= 6:
-                    break
-                hot_sectors.append({
-                    "sector": sector,
-                    "heat_score": max(0, 70 - i * 5),
-                    "summary": f"关注板块({source})",
-                    "stocks": stocks[:5],
-                })
-        context.hot_sectors = hot_sectors
-        context.warnings.append(f"发现 {len(hot_sectors)} 个港股热门板块({source})")
+        return results[:8]
