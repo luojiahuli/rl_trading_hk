@@ -1,102 +1,22 @@
-"""热门板块挖掘 Agent — 港股版（Yahoo Finance HK + AASTOCKS + 新浪港股）"""
-import os
-import re
-import requests
+#!/usr/bin/env python3
+"""热门板块挖掘 Agent — 港股版（基于 scrapling_utils）"""
 from ..agents.base import AgentContext, BaseAgent
-from ..data.sector_map import extract_hot_sectors_from_news
+from ..data.sector_map import extract_hot_sectors_from_news, _SECTOR_STOCK_MAP_HK
 from ..data.fetcher import fetch_hk_news
+from scrapling_utils import SmartFetcher
+from scrapling_utils.news_sources import (
+    YahooFinanceNews, AASTOCKSNews, SinaFinanceNews, CailiansheNews
+)
 
-_PROXY = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or os.getenv("ALL_PROXY")
-_SESSION = requests.Session()
-if _PROXY:
-    _SESSION.proxies.update({"http": _PROXY, "https": _PROXY})
-_SESSION.headers.update({"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"})
-
-
-def _fetch_yahoo_finance_hk() -> list:
-    """从 Yahoo Finance 获取港股新闻"""
-    try:
-        r = _SESSION.get(
-            "https://finance.yahoo.com/news/",
-            params={"format": "feed", "lang": "zh-Hans-HK"},
-            timeout=10,
-        )
-        r.raise_for_status()
-        items = []
-        # 尝试从 RSS/HTML 中提取新闻标题
-        text = r.text
-        titles = re.findall(r'<h3[^>]*>(.*?)</h3>', text, re.DOTALL)[:10]
-        for t in titles:
-            clean = re.sub(r'<.*?>', '', t).strip()
-            if clean:
-                items.append({"source": "yahoo_finance_hk", "title": clean, "content": clean})
-        return items
-    except Exception:
-        return []
-
-
-def _fetch_aastocks_news() -> list:
-    """从 AASTOCKS 获取港股新闻"""
-    try:
-        r = _SESSION.get(
-            "https://www.aastocks.com/en/stocks/market/news.aspx",
-            params={"type": "1", "source": "all"},
-            timeout=10,
-            headers={"Referer": "https://www.aastocks.com/"},
-        )
-        r.raise_for_status()
-        items = []
-        titles = re.findall(r'<a[^>]*class="news"[^>]*>(.*?)</a>', r.text, re.DOTALL)[:10]
-        for t in titles:
-            clean = re.sub(r'<.*?>', '', t).strip()
-            if clean:
-                items.append({"source": "aastocks", "title": clean, "content": clean})
-        return items
-    except Exception:
-        return []
-
-
-def _fetch_sina_hk_news() -> list:
-    """从新浪财经港股频道获取新闻"""
-    try:
-        r = _SESSION.get(
-            "https://feed.mix.sina.com.cn/api/roll/get",
-            params={"pageid": 153, "lid": 2515, "k": "", "num": 10, "page": 1},
-            timeout=10,
-        )
-        data = r.json()
-        items = []
-        for item in data.get("result", {}).get("data", []):
-            items.append({
-                "source": "sina_hk",
-                "title": item.get("title", ""),
-                "content": item.get("intro", "") or item.get("title", ""),
-            })
-        return items
-    except Exception:
-        return []
-
-
-def _fetch_cls_news() -> list:
-    """从财联社获取热点新闻"""
-    try:
-        r = _SESSION.get(
-            "https://www.cls.cn/api/telegraph",
-            params={"category": "1", "limit": 10},
-            timeout=10,
-            headers={"Referer": "https://www.cls.cn/"},
-        )
-        data = r.json()
-        items = []
-        for item in data.get("data", {}).get("roll_data", []):
-            items.append({
-                "source": "cls",
-                "title": item.get("title", ""),
-                "content": item.get("content", "")[:200],
-            })
-        return items
-    except Exception:
-        return []
+_fetcher = SmartFetcher()
+_yahoo = YahooFinanceNews()
+_yahoo.fetcher = _fetcher
+_aastocks = AASTOCKSNews()
+_aastocks.fetcher = _fetcher
+_sina = SinaFinanceNews()
+_sina.fetcher = _fetcher
+_cls = CailiansheNews()
+_cls.fetcher = _fetcher
 
 
 class HotSectorMiningAgent(BaseAgent):
@@ -105,61 +25,65 @@ class HotSectorMiningAgent(BaseAgent):
 
     def execute(self, context: AgentContext) -> AgentContext:
         news_items = []
+        source_name = ""
 
-        # 1. Yahoo Finance HK
-        news_items = _fetch_yahoo_finance_hk()
-        if news_items:
-            self._process_news(context, news_items, "yahoo_finance_hk")
-            return context
+        # 1. Yahoo Finance
+        items = _yahoo.fetch()
+        if items:
+            news_items = [n.to_dict() for n in items]
+            source_name = "yahoo_finance"
 
         # 2. AASTOCKS
-        news_items = _fetch_aastocks_news()
+        if not news_items:
+            items = _aastocks.fetch()
+            if items:
+                news_items = [n.to_dict() for n in items]
+                source_name = "aastocks"
+
+        # 3. yfinance API
+        if not news_items:
+            news_items = fetch_hk_news()
+            source_name = "yahoo_finance_api"
+
+        # 4. 新浪港股
+        if not news_items:
+            items = _sina.fetch(lid="2515")
+            if items:
+                news_items = [n.to_dict() for n in items]
+                source_name = "sina_hk"
+
+        # 5. 财联社
+        if not news_items:
+            items = _cls.fetch()
+            if items:
+                news_items = [n.to_dict() for n in items]
+                source_name = "cls"
+
         if news_items:
-            self._process_news(context, news_items, "aastocks")
+            self._process_news(context, news_items, source_name)
             return context
 
-        # 3. Yahoo Finance API (via yfinance)
-        news_items = fetch_hk_news()
-        if news_items:
-            self._process_news(context, news_items, "yahoo_finance_api")
-            return context
-
-        # 4. Sina HK
-        news_items = _fetch_sina_hk_news()
-        if news_items:
-            self._process_news(context, news_items, "sina_hk")
-            return context
-
-        # 5. 财联社（后备）
-        news_items = _fetch_cls_news()
-        if news_items:
-            self._process_news(context, news_items, "cls")
-            return context
-
-        # 6. fallback: 使用预设板块
-        from ..data.sector_map import _SECTOR_STOCK_MAP_HK
-        fallback_sectors = []
+        # 6. Fallback: 预设板块
+        fallback = []
         for i, (sector, stocks) in enumerate(_SECTOR_STOCK_MAP_HK.items()):
             heat = max(0, 80 - i * 5)
-            fallback_sectors.append({
+            fallback.append({
                 "sector": sector,
                 "heat_score": heat,
                 "summary": "预设关注板块",
                 "stocks": stocks[:5],
             })
-        context.hot_sectors = fallback_sectors[:8]
+        context.hot_sectors = fallback[:8]
         context.news_data = []
-        context.warnings.append(f"所有新闻源不可用，使用 {len(fallback_sectors)} 个预设板块")
+        context.warnings.append(f"所有新闻源不可用，使用 {len(fallback)} 个预设板块")
         return context
 
     def _process_news(self, context: AgentContext, news_items: list, source: str):
         context.news_data = news_items
-        # 从新闻中提取板块
         hot_sectors_raw = extract_hot_sectors_from_news(news_items)
         hot_sectors = []
         if hot_sectors_raw:
             for sector, score in hot_sectors_raw[:8]:
-                from ..data.sector_map import _SECTOR_STOCK_MAP_HK
                 stocks = _SECTOR_STOCK_MAP_HK.get(sector, [])
                 hot_sectors.append({
                     "sector": sector,
@@ -168,8 +92,6 @@ class HotSectorMiningAgent(BaseAgent):
                     "stocks": stocks[:5],
                 })
         else:
-            # 无匹配板块时使用预设
-            from ..data.sector_map import _SECTOR_STOCK_MAP_HK
             for i, (sector, stocks) in enumerate(_SECTOR_STOCK_MAP_HK.items()):
                 if i >= 6:
                     break
@@ -179,6 +101,5 @@ class HotSectorMiningAgent(BaseAgent):
                     "summary": f"关注板块({source})",
                     "stocks": stocks[:5],
                 })
-
         context.hot_sectors = hot_sectors
         context.warnings.append(f"发现 {len(hot_sectors)} 个港股热门板块({source})")
